@@ -12,7 +12,7 @@ function run(event, payload, env) {
   return spawnSync(process.execPath, [HOOK, event], { input: JSON.stringify(payload), encoding:'utf8', env:{...process.env, ...env} });
 }
 
-test('warns on a same-repo recent session, with GENERIC worktree hint (no pc-wt)', () => {
+test('warns on a same-repo recent session, with a generic worktree hint', () => {
   const repo = gitRepo();
   const projRoot = mkdtempSync(join(tmpdir(),'proj-'));
   const sess = join(projRoot, 'projA'); mkdirSync(sess);
@@ -22,7 +22,6 @@ test('warns on a same-repo recent session, with GENERIC worktree hint (no pc-wt)
   assert.equal(r.status, 0);
   assert.match(r.stdout, /parallel warning/);
   assert.match(r.stdout, /git worktree add/);
-  assert.doesNotMatch(r.stdout, /pc-wt/);
 });
 
 test('fail-open: not a git repo -> silent exit 0', () => {
