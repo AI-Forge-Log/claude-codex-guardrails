@@ -1,0 +1,5 @@
+*.log
+*.bak*
+.leakguard-local.txt
+node_modules/
+*.tmp

@@ -1,0 +1,13 @@
+{
+  "name": "claude-codex-guardrails",
+  "version": "0.1.0",
+  "description": "Reliability glue for running Claude Code and Codex as a dual-engine loop: a quota-aware review gate, a same-repo collision warden, and a one-session-per-worktree manager.",
+  "type": "module",
+  "license": "MIT",
+  "engines": { "node": ">=22" },
+  "scripts": {
+    "test": "node --test",
+    "leakguard": "node tools/leakguard.mjs"
+  },
+  "keywords": ["claude-code", "codex", "ai-pair-programming", "code-review", "git-worktree", "windows", "hooks"]
+}
