@@ -116,9 +116,17 @@ These three pieces share one rule: **a guardrail must never leave you worse off 
 ### Hooks
 Copy the two hook files into `~/.claude/ccg/`, then merge [`examples/settings.snippet.json`](examples/settings.snippet.json) into your Claude Code `settings.json`:
 
+PowerShell:
+
+```powershell
+New-Item -ItemType Directory -Force ~/.claude/ccg | Out-Null
+Copy-Item hooks/review-gate-autosync.mjs, hooks/same-repo-warden.mjs ~/.claude/ccg/
+```
+
+Git Bash:
+
 ```bash
-mkdir -p ~/.claude/ccg
-cp hooks/review-gate-autosync.mjs hooks/same-repo-warden.mjs ~/.claude/ccg/
+mkdir -p ~/.claude/ccg && cp hooks/review-gate-autosync.mjs hooks/same-repo-warden.mjs ~/.claude/ccg/
 ```
 
 The snippet wires three events:
@@ -163,9 +171,17 @@ npm test    # node --test
 > ### 钩子
 > 把两个钩子文件复制到 `~/.claude/ccg/`,再把 [`examples/settings.snippet.json`](examples/settings.snippet.json) 合并进你的 Claude Code `settings.json`:
 >
+> PowerShell:
+>
+> ```powershell
+> New-Item -ItemType Directory -Force ~/.claude/ccg | Out-Null
+> Copy-Item hooks/review-gate-autosync.mjs, hooks/same-repo-warden.mjs ~/.claude/ccg/
+> ```
+>
+> Git Bash:
+>
 > ```bash
-> mkdir -p ~/.claude/ccg
-> cp hooks/review-gate-autosync.mjs hooks/same-repo-warden.mjs ~/.claude/ccg/
+> mkdir -p ~/.claude/ccg && cp hooks/review-gate-autosync.mjs hooks/same-repo-warden.mjs ~/.claude/ccg/
 > ```
 >
 > 这段配置接入三个事件:
