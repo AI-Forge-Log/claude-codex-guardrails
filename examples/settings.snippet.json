@@ -1,0 +1,16 @@
+{
+  "hooks": {
+    "SessionStart": [
+      { "hooks": [
+        { "type": "command", "command": "node ~/.claude/ccg/review-gate-autosync.mjs SessionStart" },
+        { "type": "command", "command": "node ~/.claude/ccg/same-repo-warden.mjs SessionStart" }
+      ] }
+    ],
+    "Stop": [
+      { "hooks": [ { "type": "command", "command": "node ~/.claude/ccg/review-gate-autosync.mjs Stop" } ] }
+    ],
+    "PreToolUse": [
+      { "matcher": "Edit|Write", "hooks": [ { "type": "command", "command": "node ~/.claude/ccg/same-repo-warden.mjs PreToolUse" } ] }
+    ]
+  }
+}
