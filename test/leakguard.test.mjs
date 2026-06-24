@@ -10,6 +10,8 @@ import { scanDir } from '../tools/leakguard.mjs';
 const BS = String.fromCharCode(92);                // backslash
 const CJK = String.fromCharCode(0x4e2d, 0x6587);   // two CJK characters
 const EMAIL = 'a' + '@' + 'real.com';              // non-whitelisted email
+const NEAR_EMAIL = 'x' + '@' + 'notexample.com';   // domain merely ENDS WITH example.com -> must still flag
+const OK_EMAIL = 'u' + '@' + 'example.com';        // exact allowlisted domain -> must NOT flag
 const WIN_PATH = 'C:' + BS + 'Users' + BS + 'bob'; // Windows-style absolute path
 
 function fixture(files) {
@@ -42,6 +44,20 @@ test('flags windows absolute path and email', () => {
   rmSync(dir, { recursive: true, force: true });
   assert.ok(hits.some(h => h.rule === 'abs-path'));
   assert.ok(hits.some(h => h.rule === 'email'));
+});
+
+test('flags email whose domain merely ends with example.com', () => {
+  const dir = fixture({ 'tools/near.mjs': 'const c = "' + NEAR_EMAIL + '";\n' });
+  const hits = scanDir(dir);
+  rmSync(dir, { recursive: true, force: true });
+  assert.ok(hits.some(h => h.rule === 'email'));
+});
+
+test('does not flag exact example.com allowlisted email', () => {
+  const dir = fixture({ 'tools/ok.mjs': 'const c = "' + OK_EMAIL + '";\n' });
+  const hits = scanDir(dir);
+  rmSync(dir, { recursive: true, force: true });
+  assert.equal(hits.filter(h => h.rule === 'email').length, 0);
 });
 
 test('clean code file passes', () => {

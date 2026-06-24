@@ -16,7 +16,9 @@ const RULES = [
       /[A-Za-z]:\\(Users|\u6211\u7684)/i.test(line) || /\bC:\\Users\\/i.test(line) || /\bE:\\/.test(line) },
   { rule: 'email', test: (_rel, line) => {
       const m = line.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
-      return m && !m[0].endsWith('example.com'); } },
+      if (!m) return false;
+      const domain = m[0].slice(m[0].lastIndexOf('@') + 1).toLowerCase();
+      return !(domain === 'example.com' || domain.endsWith('.example.com')); } },
 ];
 
 export function scanDir(root) {
