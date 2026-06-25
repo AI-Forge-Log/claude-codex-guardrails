@@ -108,7 +108,7 @@ These three pieces share one rule: **a guardrail must never leave you worse off 
 ## Install & use
 
 ### Requirements
-- **Node >= 22** (the hooks and tools use Node built-ins only).
+- **Node >= 24** (the hooks and tools use Node built-ins only; tested on Node 24). The review gate reads Codex quota via `node:sqlite`, which is only available unflagged on a recent Node — hence the Node 24 floor.
 - **git** with worktree support.
 - **Windows PowerShell 5.1+** or **pwsh** (for `wt.ps1`).
 - **Tested on Windows.** No cross-platform guarantee — the logic is portable, but it has only been exercised on Windows.
@@ -163,7 +163,7 @@ npm test    # node --test
 > **中文**
 >
 > ### 环境要求
-> - **Node >= 22**(钩子和工具只用 Node 内置模块)。
+> - **Node >= 24**(钩子和工具只用 Node 内置模块;在 Node 24 上测试过)。复核闸通过 `node:sqlite` 读取 Codex 额度,而 `node:sqlite` 只有在较新的 Node 上才默认可用(无需实验性 flag),所以定下 Node 24 这条底线。
 > - 支持 worktree 的 **git**。
 > - **Windows PowerShell 5.1+** 或 **pwsh**(用于 `wt.ps1`)。
 > - **已在 Windows 上测试。** 不保证跨平台——逻辑是可移植的,但只在 Windows 上跑过。
