@@ -18,7 +18,7 @@
 //   WARDEN_PROJECTS_ROOT  override the ~/.claude/projects scan root
 //   WARDEN_WINDOW_MIN     "recently active" window in minutes (default 10)
 
-import { readFileSync, readdirSync, statSync, openSync, fstatSync, readSync, closeSync } from 'node:fs';
+import { readFileSync, readdirSync, statSync, openSync, fstatSync, readSync, closeSync, writeSync } from 'node:fs';
 import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { execSync } from 'node:child_process';
@@ -147,10 +147,13 @@ function main() {
   const msg = `⚠️ Same-repo parallel warning: ${others.length} other recently-active Claude session(s) are also in repo "${repo}" (${who}). `
     + `Two sessions writing the same repo at once corrupt shared git state (index/HEAD/branch). ${fix}`;
 
+  // Synchronous write to fd 1: flushed before the trailing ok()/process.exit(0),
+  // so the warning JSON is never dropped when stdout is a pipe (Claude Code
+  // captures hook output through a pipe).
   if (EVENT === 'SessionStart') {
     // SessionStart: inject into context (so the assistant can see and relay it)
     // and also surface as a systemMessage to the user.
-    process.stdout.write(JSON.stringify({
+    writeSync(1, JSON.stringify({
       hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: msg },
       systemMessage: msg,
     }));
@@ -159,7 +162,7 @@ function main() {
     // (hookSpecificOutput.additionalContext is what Claude Code reads for
     // PreToolUse) AND keep the top-level systemMessage for the user. No
     // permissionDecision -> stays non-blocking: allow + show the warning.
-    process.stdout.write(JSON.stringify({
+    writeSync(1, JSON.stringify({
       hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: msg },
       systemMessage: msg,
     }));

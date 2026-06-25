@@ -45,6 +45,7 @@ import { createHash } from "node:crypto";
 import { createRequire } from "node:module";
 import { spawnSync } from "node:child_process";
 import fs from "node:fs";
+import { writeSync } from "node:fs";
 import os from "node:os";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
@@ -370,7 +371,9 @@ function main() {
 
   if (event === "manual") {
     // Human-readable mode: print the state, do not emit hook JSON.
-    process.stdout.write(
+    // Synchronous write to fd 1: flushed before the trailing process.exit(0), so
+    // the output is never dropped when stdout is a pipe (Claude Code captures it).
+    writeSync(1,
       `Workspace: ${workspaceRoot}\n` +
       `Codex quota: ${quota.readable ? `readable (${quota.detail})` : `unreadable (${quota.detail})`}\n` +
       `Verdict: ${quota.hasQuota ? "has quota -> gate ON" : "no quota -> gate OFF"}\n` +
@@ -380,13 +383,15 @@ function main() {
   }
 
   if (event === "SessionStart") {
+    // Synchronous write to fd 1: flushed before the trailing process.exit(0), so
+    // the hook JSON (systemMessage) is never dropped when stdout is a pipe.
     if (r.changed) {
       const msg = desired
         ? "✅ Codex quota recovered — the stop-review gate is re-enabled (Codex reviews changes before the session can stop)."
         : "⚠️ Codex quota exhausted — the stop-review gate is disabled so it won't block this session from stopping; it re-enables next session once quota recovers.";
-      process.stdout.write(`${JSON.stringify({ continue: true, suppressOutput: true, systemMessage: msg })}\n`);
+      writeSync(1, `${JSON.stringify({ continue: true, suppressOutput: true, systemMessage: msg })}\n`);
     } else {
-      process.stdout.write(`${JSON.stringify({ continue: true, suppressOutput: true })}\n`);
+      writeSync(1, `${JSON.stringify({ continue: true, suppressOutput: true })}\n`);
     }
     return;
   }

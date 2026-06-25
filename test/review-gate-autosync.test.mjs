@@ -41,6 +41,14 @@ test('SessionStart + quota: creates/sets gate ON', () => {
   rmSync(dataRoot, { recursive: true, force: true });
   assert.equal(r.status, 0);
   assert.match(found, /Y/);
+  // The hook JSON must still reach stdout (synchronous fd-1 write is flushed
+  // before process.exit(0); a pipe must not drop it). Gate flipped off->on here,
+  // so SessionStart emits the systemMessage variant.
+  assert.notEqual(r.stdout.trim(), '');
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.continue, true);
+  assert.equal(out.suppressOutput, true);
+  assert.match(out.systemMessage, /stop-review gate is re-enabled/);
 });
 
 test('never blocks: Stop event exits 0 with no decision:block', () => {
