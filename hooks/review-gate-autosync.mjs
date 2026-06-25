@@ -121,26 +121,72 @@ function resolveCodexDbPath(dir) {
   return best ? best.path : null;
 }
 
+// Read the object that follows `"<key>":` in `text`, starting at index `from`.
+// Handles a balanced `{...}` (returns the JS object), `null` (returns null), or
+// no match (returns undefined). Brace-balanced so it survives nested sub-objects
+// like primary/secondary. Quote-/escape-naive on purpose — the bodies we parse
+// have already been un-escaped by the caller and contain no string braces here.
+function readObjectAfterKey(text, key, from = 0) {
+  const m = new RegExp(`"${key}"\\s*:\\s*`, "g");
+  m.lastIndex = from;
+  const hit = m.exec(text);
+  if (!hit) return undefined;
+  let i = m.lastIndex;
+  if (text.startsWith("null", i)) return null;
+  if (text[i] !== "{") return undefined;
+  let depth = 0;
+  for (let j = i; j < text.length; j++) {
+    const ch = text[j];
+    if (ch === "{") depth++;
+    else if (ch === "}") {
+      depth--;
+      if (depth === 0) {
+        try {
+          const obj = JSON.parse(text.slice(i, j + 1));
+          return obj && typeof obj === "object" ? obj : undefined;
+        } catch { return undefined; }
+      }
+    }
+  }
+  return undefined;
+}
+
 // Pull the rate-limit fields out of a logged Codex "codex.rate_limits" event body.
-// Real shape (siblings inside the `rate_limits` object):
-//   { allowed, limit_reached, primary:{used_percent,...}, secondary:{used_percent,...} }
+// Real shape (verified in logs_*.sqlite):
+//   { type:"codex.rate_limits",
+//     rate_limits:{ allowed, limit_reached, primary:{used_percent,...}, secondary:{...} },
+//     code_review_rate_limits: null | {...},   <- separate, first-class sibling
+//     additional_rate_limits:  null | {...}, credits, promo }
 // `allowed` / `limit_reached` are authoritative and DECOUPLED from the percentages:
 // Codex can report allowed:false / limit_reached:true (credits drained, or an
 // additional/code-review limit) while primary/secondary used_percent still look fine.
-function extractRateLimits(body) {
+// The Stop gate launches a *code review*, so we surface code_review_rate_limits and
+// additional_rate_limits alongside the general object for decideHasQuota to weigh.
+export function extractRateLimits(body) {
   for (const text of [body, body.replace(/\\"/g, '"')]) {
-    const p = text.match(/"primary"\s*:\s*(\{[^{}]*\})/);
-    const s = text.match(/"secondary"\s*:\s*(\{[^{}]*\})/);
+    // Scope the general fields to the `rate_limits` object so a sibling
+    // code_review_rate_limits / additional_rate_limits object cannot leak its
+    // primary/allowed into the general decision (the bug this fix addresses).
+    const rlIdx = text.indexOf('"rate_limits"');
+    const scope = rlIdx >= 0 ? rlIdx : 0;
+    const p = scopedMatch(text, scope, /"primary"\s*:\s*(\{[^{}]*\})/);
+    const s = scopedMatch(text, scope, /"secondary"\s*:\s*(\{[^{}]*\})/);
     if (p && s) {
       try {
-        const primary = JSON.parse(p[1]);
-        const secondary = JSON.parse(s[1]);
+        const primary = JSON.parse(p);
+        const secondary = JSON.parse(s);
         if (primary && typeof primary === "object" && secondary && typeof secondary === "object") {
           const result = { primary, secondary };
-          const a = text.match(/"allowed"\s*:\s*(true|false)/);
-          if (a) result.allowed = a[1] === "true";
-          const lr = text.match(/"limit_reached"\s*:\s*(true|false)/);
-          if (lr) result.limit_reached = lr[1] === "true";
+          const a = scopedMatch(text, scope, /"allowed"\s*:\s*(true|false)/);
+          if (a) result.allowed = a === "true";
+          const lr = scopedMatch(text, scope, /"limit_reached"\s*:\s*(true|false)/);
+          if (lr) result.limit_reached = lr === "true";
+          // Surface the separate code-review / additional limits when present and
+          // non-null. Absent or null -> omit -> decideHasQuota falls back to general.
+          const cr = readObjectAfterKey(text, "code_review_rate_limits");
+          if (cr) result.code_review_rate_limits = cr;
+          const ad = readObjectAfterKey(text, "additional_rate_limits");
+          if (ad) result.additional_rate_limits = ad;
           return result;
         }
       } catch { /* try the next interpretation */ }
@@ -149,28 +195,66 @@ function extractRateLimits(body) {
   return null;
 }
 
+// Match `re` against `text` but only consider matches at or after `from`.
+// Returns the first capture group of the earliest such match, or null.
+function scopedMatch(text, from, re) {
+  const g = new RegExp(re.source, re.flags.includes("g") ? re.flags : `${re.flags}g`);
+  g.lastIndex = from;
+  const m = g.exec(text);
+  return m ? m[1] : null;
+}
+
 const pct = (w) => (w && typeof w === "object" && typeof w.used_percent === "number" ? w.used_percent : null);
+
+/**
+ * Decide whether ONE rate-limit object (allowed/limit_reached/primary/secondary)
+ * still has room. FAIL-SAFE: when in doubt, return false (treat as exhausted).
+ * @param {{ allowed?: boolean, limit_reached?: boolean, primary?: object, secondary?: object } | null | undefined} obj
+ * @returns {boolean} true only when the object is allowed AND no window is exhausted.
+ */
+function objectAllowed(obj) {
+  if (!obj || typeof obj !== "object") return false;
+  // Honor Codex's explicit not-allowed / limit-reached signals first. These can be
+  // set for reasons (credits, additional/code-review limits) that the primary/
+  // secondary percentages do NOT reflect, so they override the percentage check.
+  if (obj.allowed === false) return false;
+  if (obj.limit_reached === true) return false;
+  const p = pct(obj.primary);
+  const s = pct(obj.secondary);
+  const known = [p, s].filter((v) => typeof v === "number");
+  if (known.length === 0) return false; // no readable percentage -> fail-safe -> no quota
+  return known.every((v) => v < EXHAUSTED_AT);
+}
 
 /**
  * Pure quota decision, separated from sqlite I/O so it can be unit-tested.
  * FAIL-SAFE direction: when in doubt, return false (no quota -> gate OFF -> the
  * gate can never be left ON with no quota, which would trap the session on Stop).
  *
- * @param {{ allowed?: boolean, limit_reached?: boolean, primary?: object, secondary?: object } | null | undefined} rateLimits
- * @returns {boolean} true only when Codex is allowed AND no window is exhausted.
+ * The Stop gate launches a *Codex code review* specifically. The real
+ * `codex.rate_limits` telemetry event carries a separate, first-class sibling
+ * `code_review_rate_limits` (verified present in logs_*.sqlite; `null` on plans
+ * with no distinct code-review limit). If the general quota is allowed but the
+ * code-review quota is exhausted, the review the gate triggers cannot run — so we
+ * must report NO quota and leave the gate OFF. We therefore require the general
+ * object AND any present-and-non-null code-review / additional rate-limit objects
+ * to all be allowed. Absent/null sub-objects fall back to the general decision.
+ *
+ * @param {{ allowed?: boolean, limit_reached?: boolean, primary?: object, secondary?: object,
+ *           code_review_rate_limits?: object|null, additional_rate_limits?: object|null } | null | undefined} rateLimits
+ * @returns {boolean} true only when every applicable limit is allowed and under threshold.
  */
 export function decideHasQuota(rateLimits) {
   if (!rateLimits || typeof rateLimits !== "object") return false;
-  // Honor Codex's explicit not-allowed / limit-reached signals first. These can be
-  // set for reasons (credits, additional/code-review limits) that the primary/
-  // secondary percentages do NOT reflect, so they override the percentage check.
-  if (rateLimits.allowed === false) return false;
-  if (rateLimits.limit_reached === true) return false;
-  const p = pct(rateLimits.primary);
-  const s = pct(rateLimits.secondary);
-  const known = [p, s].filter((v) => typeof v === "number");
-  if (known.length === 0) return false; // no readable percentage -> fail-safe -> no quota
-  return known.every((v) => v < EXHAUSTED_AT);
+  if (!objectAllowed(rateLimits)) return false;
+  // Any present-and-non-null code-review / additional limit must ALSO be allowed.
+  // (When the field is absent or null this loop is a no-op -> general decision stands.)
+  for (const key of ["code_review_rate_limits", "additional_rate_limits"]) {
+    const sub = rateLimits[key];
+    if (sub === null || sub === undefined) continue; // absent/null -> fall back to general
+    if (!objectAllowed(sub)) return false;
+  }
+  return true;
 }
 
 /**
@@ -202,7 +286,11 @@ function readQuota() {
       if (known.length === 0) continue;
       const hasQuota = decideHasQuota(w);
       const flags = `allowed=${w.allowed ?? "?"} limit_reached=${w.limit_reached ?? "?"}`;
-      return { readable: true, hasQuota, primary: p, secondary: s, detail: `primary=${p} secondary=${s} ${flags}` };
+      // Note the separate code-review limit in the detail only when it is actually
+      // present (non-null); on plans without one it stays silent.
+      const cr = w.code_review_rate_limits;
+      const crFlag = cr ? ` code_review_allowed=${cr.allowed ?? "?"} code_review_limit_reached=${cr.limit_reached ?? "?"}` : "";
+      return { readable: true, hasQuota, primary: p, secondary: s, detail: `primary=${p} secondary=${s} ${flags}${crFlag}` };
     }
     return { readable: false, hasQuota: false, primary: null, secondary: null, detail: "no rate-limit row found" };
   } catch (e) {

@@ -5,7 +5,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { decideHasQuota } from '../hooks/review-gate-autosync.mjs';
+import { decideHasQuota, extractRateLimits } from '../hooks/review-gate-autosync.mjs';
 
 // NOTE: `new URL(...).pathname` is broken on Windows — it yields a leading-slash,
 // percent-encoded path (e.g. `/C:/...`, `/E:/%E6%88%91...`) that `spawnSync`
@@ -84,4 +84,94 @@ test('decideHasQuota: missing/garbage object -> NO quota (fail-safe)', () => {
   assert.equal(decideHasQuota(null), false);
   assert.equal(decideHasQuota(undefined), false);
   assert.equal(decideHasQuota({}), false); // no readable percentage and no positive allow signal
+});
+
+// --- Finding 1: honor the SEPARATE code-review rate limit ---------------------
+// The real `codex.rate_limits` telemetry event carries a first-class sibling
+// `code_review_rate_limits` (verified in logs_*.sqlite, currently `null` on a
+// Plus plan). Since the Stop gate launches a *code review* specifically, an
+// exhausted code-review limit must mean NO quota even when the general window is
+// allowed — otherwise the gate stays ON and traps the session, the exact failure
+// this hook exists to prevent. We model the populated object with the same shape
+// Codex uses for every rate-limit object (allowed/limit_reached/primary/secondary).
+
+test('decideHasQuota: general allowed but code_review_rate_limits exhausted -> NO quota', () => {
+  const rl = {
+    allowed: true, limit_reached: false,
+    primary: { used_percent: 16 }, secondary: { used_percent: 3 },
+    code_review_rate_limits: { allowed: false, limit_reached: true, primary: { used_percent: 100 } },
+  };
+  assert.equal(decideHasQuota(rl), false);
+});
+
+test('decideHasQuota: general allowed but code_review_rate_limits at threshold -> NO quota', () => {
+  const rl = {
+    allowed: true, limit_reached: false,
+    primary: { used_percent: 16 }, secondary: { used_percent: 3 },
+    code_review_rate_limits: { allowed: true, limit_reached: false, primary: { used_percent: 100 } },
+  };
+  assert.equal(decideHasQuota(rl), false);
+});
+
+test('decideHasQuota: general allowed AND code_review allowed, both under threshold -> has quota', () => {
+  const rl = {
+    allowed: true, limit_reached: false,
+    primary: { used_percent: 16 }, secondary: { used_percent: 3 },
+    code_review_rate_limits: { allowed: true, limit_reached: false, primary: { used_percent: 20 }, secondary: { used_percent: 5 } },
+  };
+  assert.equal(decideHasQuota(rl), true);
+});
+
+test('decideHasQuota: code_review_rate_limits = null (real Plus-plan shape) -> falls back to general decision', () => {
+  const allowed = { allowed: true, limit_reached: false, primary: { used_percent: 16 }, secondary: { used_percent: 3 }, code_review_rate_limits: null };
+  assert.equal(decideHasQuota(allowed), true);
+  const blocked = { allowed: false, limit_reached: true, primary: { used_percent: 16 }, secondary: { used_percent: 3 }, code_review_rate_limits: null };
+  assert.equal(decideHasQuota(blocked), false);
+});
+
+test('decideHasQuota: code_review_rate_limits ABSENT -> identical to general-only decision (regression guard)', () => {
+  const allowed = { allowed: true, limit_reached: false, primary: { used_percent: 16 }, secondary: { used_percent: 3 } };
+  assert.equal(decideHasQuota(allowed), true);
+  const blocked = { allowed: true, limit_reached: false, primary: { used_percent: 100 }, secondary: { used_percent: 3 } };
+  assert.equal(decideHasQuota(blocked), false);
+});
+
+// --- extractRateLimits: parse the real telemetry body shape (runtime side) ----
+// Bodies are built at runtime as pure-ASCII JSON to mirror the verified
+// logs_*.sqlite `codex.rate_limits` websocket event without any literal fixtures.
+function rlBody({ rl, codeReview, additional }) {
+  const env = {
+    type: 'codex.rate_limits',
+    plan_type: 'plus',
+    rate_limits: rl,
+    code_review_rate_limits: codeReview ?? null,
+    additional_rate_limits: additional ?? null,
+    credits: null,
+    promo: null,
+  };
+  // Wrap like the real log line: prose prefix + JSON, exactly as Codex logs it.
+  return `websocket event: ${JSON.stringify(env)}`;
+}
+
+test('extractRateLimits: real null shape -> general fields only, decideHasQuota follows general', () => {
+  const body = rlBody({
+    rl: { allowed: true, limit_reached: false, primary: { used_percent: 16, reset_at: 1 }, secondary: { used_percent: 3, reset_at: 2 } },
+  });
+  const w = extractRateLimits(body);
+  assert.equal(w.allowed, true);
+  assert.equal(w.primary.used_percent, 16);
+  assert.equal(w.code_review_rate_limits, undefined); // null -> omitted
+  assert.equal(decideHasQuota(w), true);
+});
+
+test('extractRateLimits: general allowed but code_review exhausted -> surfaced -> NO quota', () => {
+  const body = rlBody({
+    rl: { allowed: true, limit_reached: false, primary: { used_percent: 16, reset_at: 1 }, secondary: { used_percent: 3, reset_at: 2 } },
+    codeReview: { allowed: false, limit_reached: true, primary: { used_percent: 100, reset_at: 9 } },
+  });
+  const w = extractRateLimits(body);
+  // The general object must NOT inherit the code-review object's allowed:false.
+  assert.equal(w.allowed, true);
+  assert.equal(w.code_review_rate_limits.allowed, false);
+  assert.equal(decideHasQuota(w), false);
 });
