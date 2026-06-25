@@ -1,4 +1,8 @@
-# claude-codex-guardrails
+<p align="center">
+  <img src="assets/logo.svg" alt="claude-codex-guardrails logo" width="104" height="104">
+</p>
+
+<h1 align="center">claude-codex-guardrails</h1>
 
 > Reliability glue for running Claude Code and Codex as a long-running dual-engine loop.
 > 把 Claude Code 与 Codex 当成长跑式双引擎来跑的「可靠性胶水」。
