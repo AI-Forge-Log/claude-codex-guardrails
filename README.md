@@ -132,7 +132,7 @@ mkdir -p ~/.claude/ccg && cp hooks/review-gate-autosync.mjs hooks/same-repo-ward
 The snippet wires three events:
 - **SessionStart** → both hooks (sync the gate, check for a same-repo session).
 - **Stop** → `review-gate-autosync` (enforce / step aside at stop time).
-- **PreToolUse** with matcher `Edit|Write` → `same-repo-warden` (warn before an edit lands).
+- **PreToolUse** with matcher `Edit|Write|MultiEdit|NotebookEdit` → `same-repo-warden` (warn before an edit lands).
 
 ### Worktree manager
 Run from inside the repo (any worktree — the script finds the main one itself):
@@ -187,7 +187,7 @@ npm test    # node --test
 > 这段配置接入三个事件:
 > - **SessionStart** → 两个钩子都跑(同步闸 + 检查是否有同仓会话)。
 > - **Stop** → `review-gate-autosync`(在停止时强制 / 让开)。
-> - **PreToolUse**(matcher 为 `Edit|Write`)→ `same-repo-warden`(编辑落盘前提醒)。
+> - **PreToolUse**(matcher 为 `Edit|Write|MultiEdit|NotebookEdit`)→ `same-repo-warden`(编辑落盘前提醒)。
 >
 > ### worktree 管理器
 > 在仓库内任意位置运行(任一 worktree 都行——脚本会自己找到主 worktree):
