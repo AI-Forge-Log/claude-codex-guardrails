@@ -120,11 +120,17 @@ function main() {
       if (m.mtimeMs < cutoff) continue;              // not "recently active" -> skip
       const ocwd = tailCwd(full);
       if (!ocwd) continue;
-      const no = norm(ocwd);
-      // Same working-tree test: the other cwd equals, or sits under, my repo root.
-      // (A different worktree has a different root, so a correctly-isolated
-      //  session never falls in here -> no false positives.)
-      if (no === normTop || no.startsWith(normTop + '/')) {
+      // Same working-tree test: resolve the OTHER session's own git toplevel and
+      // compare it to mine for equality. Raw-prefix comparison was wrong both ways:
+      //   - an alias of the same checkout (junction/symlink/subst) does NOT prefix
+      //     myTop -> a real collision was MISSED;
+      //   - a nested git repo / submodule UNDER my root DOES prefix myTop -> a
+      //     spurious warning even though its toplevel differs.
+      // FAIL-OPEN: if the candidate's git root can't be resolved (not a repo, gone,
+      // git error), skip it silently — the warden must never block or error.
+      const otop = gitToplevel(ocwd);
+      if (!otop) continue;
+      if (norm(otop) === normTop) {
         others.push({ id: sid.slice(0, 8), at: m.mtime });
       }
     }
