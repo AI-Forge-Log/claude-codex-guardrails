@@ -47,6 +47,7 @@ import { spawnSync } from "node:child_process";
 import fs from "node:fs";
 import os from "node:os";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 
 const require = createRequire(import.meta.url);
 
@@ -120,7 +121,13 @@ function resolveCodexDbPath(dir) {
   return best ? best.path : null;
 }
 
-function extractWindows(body) {
+// Pull the rate-limit fields out of a logged Codex "codex.rate_limits" event body.
+// Real shape (siblings inside the `rate_limits` object):
+//   { allowed, limit_reached, primary:{used_percent,...}, secondary:{used_percent,...} }
+// `allowed` / `limit_reached` are authoritative and DECOUPLED from the percentages:
+// Codex can report allowed:false / limit_reached:true (credits drained, or an
+// additional/code-review limit) while primary/secondary used_percent still look fine.
+function extractRateLimits(body) {
   for (const text of [body, body.replace(/\\"/g, '"')]) {
     const p = text.match(/"primary"\s*:\s*(\{[^{}]*\})/);
     const s = text.match(/"secondary"\s*:\s*(\{[^{}]*\})/);
@@ -129,7 +136,12 @@ function extractWindows(body) {
         const primary = JSON.parse(p[1]);
         const secondary = JSON.parse(s[1]);
         if (primary && typeof primary === "object" && secondary && typeof secondary === "object") {
-          return { primary, secondary };
+          const result = { primary, secondary };
+          const a = text.match(/"allowed"\s*:\s*(true|false)/);
+          if (a) result.allowed = a[1] === "true";
+          const lr = text.match(/"limit_reached"\s*:\s*(true|false)/);
+          if (lr) result.limit_reached = lr[1] === "true";
+          return result;
         }
       } catch { /* try the next interpretation */ }
     }
@@ -138,6 +150,28 @@ function extractWindows(body) {
 }
 
 const pct = (w) => (w && typeof w === "object" && typeof w.used_percent === "number" ? w.used_percent : null);
+
+/**
+ * Pure quota decision, separated from sqlite I/O so it can be unit-tested.
+ * FAIL-SAFE direction: when in doubt, return false (no quota -> gate OFF -> the
+ * gate can never be left ON with no quota, which would trap the session on Stop).
+ *
+ * @param {{ allowed?: boolean, limit_reached?: boolean, primary?: object, secondary?: object } | null | undefined} rateLimits
+ * @returns {boolean} true only when Codex is allowed AND no window is exhausted.
+ */
+export function decideHasQuota(rateLimits) {
+  if (!rateLimits || typeof rateLimits !== "object") return false;
+  // Honor Codex's explicit not-allowed / limit-reached signals first. These can be
+  // set for reasons (credits, additional/code-review limits) that the primary/
+  // secondary percentages do NOT reflect, so they override the percentage check.
+  if (rateLimits.allowed === false) return false;
+  if (rateLimits.limit_reached === true) return false;
+  const p = pct(rateLimits.primary);
+  const s = pct(rateLimits.secondary);
+  const known = [p, s].filter((v) => typeof v === "number");
+  if (known.length === 0) return false; // no readable percentage -> fail-safe -> no quota
+  return known.every((v) => v < EXHAUSTED_AT);
+}
 
 /**
  * @returns {{ readable: boolean, hasQuota: boolean, primary: number|null, secondary: number|null, detail: string }}
@@ -160,14 +194,15 @@ function readQuota() {
     ).all();
     for (const r of rows) {
       if (typeof r.body !== "string") continue;
-      const w = extractWindows(r.body);
+      const w = extractRateLimits(r.body);
       if (!w) continue;
       const p = pct(w.primary);
       const s = pct(w.secondary);
       const known = [p, s].filter((v) => typeof v === "number");
       if (known.length === 0) continue;
-      const hasQuota = known.every((v) => v < EXHAUSTED_AT);
-      return { readable: true, hasQuota, primary: p, secondary: s, detail: `primary=${p} secondary=${s}` };
+      const hasQuota = decideHasQuota(w);
+      const flags = `allowed=${w.allowed ?? "?"} limit_reached=${w.limit_reached ?? "?"}`;
+      return { readable: true, hasQuota, primary: p, secondary: s, detail: `primary=${p} secondary=${s} ${flags}` };
     }
     return { readable: false, hasQuota: false, primary: null, secondary: null, detail: "no rate-limit row found" };
   } catch (e) {
@@ -272,10 +307,15 @@ function main() {
   // (empty stdout + exit 0 = allow stopping)
 }
 
-try {
-  main();
-} catch (e) {
-  // Never interrupt the session: swallow any error, log it, exit 0.
-  log(`FATAL ${e && e.stack ? e.stack : e}`);
+// Only run the hook when invoked directly as a CLI. Importing this module (e.g.
+// from unit tests, to exercise decideHasQuota) must NOT run main()/process.exit().
+// pathToFileURL normalizes both sides on Windows and POSIX (same fix as leakguard).
+if (import.meta.url === pathToFileURL(process.argv[1]).href) {
+  try {
+    main();
+  } catch (e) {
+    // Never interrupt the session: swallow any error, log it, exit 0.
+    log(`FATAL ${e && e.stack ? e.stack : e}`);
+  }
+  process.exit(0);
 }
-process.exit(0);

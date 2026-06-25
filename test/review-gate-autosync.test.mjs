@@ -5,6 +5,7 @@ import { mkdtempSync, rmSync, existsSync, readFileSync, mkdirSync, writeFileSync
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { decideHasQuota } from '../hooks/review-gate-autosync.mjs';
 
 // NOTE: `new URL(...).pathname` is broken on Windows — it yields a leading-slash,
 // percent-encoded path (e.g. `/C:/...`, `/E:/%E6%88%91...`) that `spawnSync`
@@ -48,4 +49,39 @@ test('never blocks: Stop event exits 0 with no decision:block', () => {
   rmSync(ws, { recursive: true, force: true }); rmSync(dataRoot, { recursive: true, force: true });
   assert.equal(r.status, 0);
   assert.doesNotMatch(r.stdout, /block/);
+});
+
+// --- decideHasQuota: pure quota decision (fail-safe direction) ---------------
+// Field shape comes from the real Codex websocket "codex.rate_limits" event:
+//   { allowed, limit_reached, primary:{used_percent,...}, secondary:{used_percent,...} }
+// `allowed`/`limit_reached` sit beside primary/secondary and are AUTHORITATIVE:
+// Codex can be not-allowed (credits, an additional/code-review limit) while both
+// percentages still look fine. Honoring only the percentage would keep the gate ON
+// with no quota -> Stop triggers a review that cannot run -> session trapped.
+
+test('decideHasQuota: under threshold but allowed:false -> NO quota (RED case)', () => {
+  // Real-data shape: a not-allowed window whose percentages are NOT maxed.
+  const rl = { allowed: false, limit_reached: true, primary: { used_percent: 14 }, secondary: { used_percent: 20 } };
+  assert.equal(decideHasQuota(rl), false);
+});
+
+test('decideHasQuota: limit_reached:true alone -> NO quota even if allowed missing', () => {
+  const rl = { limit_reached: true, primary: { used_percent: 1 }, secondary: { used_percent: 3 } };
+  assert.equal(decideHasQuota(rl), false);
+});
+
+test('decideHasQuota: normal allowed window under threshold -> has quota', () => {
+  const rl = { allowed: true, limit_reached: false, primary: { used_percent: 16 }, secondary: { used_percent: 3 } };
+  assert.equal(decideHasQuota(rl), true);
+});
+
+test('decideHasQuota: percentage at/over threshold -> NO quota', () => {
+  const rl = { allowed: true, limit_reached: false, primary: { used_percent: 100 }, secondary: { used_percent: 3 } };
+  assert.equal(decideHasQuota(rl), false);
+});
+
+test('decideHasQuota: missing/garbage object -> NO quota (fail-safe)', () => {
+  assert.equal(decideHasQuota(null), false);
+  assert.equal(decideHasQuota(undefined), false);
+  assert.equal(decideHasQuota({}), false); // no readable percentage and no positive allow signal
 });
