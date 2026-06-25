@@ -155,8 +155,14 @@ function main() {
       systemMessage: msg,
     }));
   } else {
-    // PreToolUse etc.: only a systemMessage, no permissionDecision -> allow + show the warning.
-    process.stdout.write(JSON.stringify({ systemMessage: msg }));
+    // PreToolUse etc.: surface the warning via the event-specific channel
+    // (hookSpecificOutput.additionalContext is what Claude Code reads for
+    // PreToolUse) AND keep the top-level systemMessage for the user. No
+    // permissionDecision -> stays non-blocking: allow + show the warning.
+    process.stdout.write(JSON.stringify({
+      hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: msg },
+      systemMessage: msg,
+    }));
   }
   return ok();
 }

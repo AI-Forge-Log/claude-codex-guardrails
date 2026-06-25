@@ -22,6 +22,14 @@ test('warns on a same-repo recent session, with a generic worktree hint', () => 
   assert.equal(r.status, 0);
   assert.match(r.stdout, /parallel warning/);
   assert.match(r.stdout, /git worktree add/);
+  // PreToolUse output must carry the warning via the event-specific channel
+  // (Claude Code reads hookSpecificOutput.additionalContext for PreToolUse),
+  // and stay non-blocking (no permissionDecision).
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.hookSpecificOutput.hookEventName, 'PreToolUse');
+  assert.match(out.hookSpecificOutput.additionalContext, /parallel warning/);
+  assert.match(out.systemMessage, /parallel warning/);
+  assert.equal(out.hookSpecificOutput.permissionDecision, undefined);
 });
 
 test('fail-open: not a git repo -> silent exit 0', () => {
