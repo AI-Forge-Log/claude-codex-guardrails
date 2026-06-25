@@ -15,10 +15,12 @@ const RULES = [
   { rule: 'abs-path', test: (_rel, line) =>
       /[A-Za-z]:\\(Users|\u6211\u7684)/i.test(line) || /\bC:\\Users\\/i.test(line) || /\bE:\\/.test(line) },
   { rule: 'email', test: (_rel, line) => {
-      const m = line.match(/[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/);
-      if (!m) return false;
-      const domain = m[0].slice(m[0].lastIndexOf('@') + 1).toLowerCase();
-      return !(domain === 'example.com' || domain.endsWith('.example.com')); } },
+      const re = /[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}/g;
+      for (const m of line.matchAll(re)) {
+        const domain = m[0].slice(m[0].lastIndexOf('@') + 1).toLowerCase();
+        if (domain !== 'example.com' && !domain.endsWith('.example.com')) return true;
+      }
+      return false; } },
 ];
 
 export function scanDir(root) {
@@ -30,6 +32,7 @@ export function scanDir(root) {
     for (const name of readdirSync(dir)) {
       if (SKIP_DIRS.has(name)) continue;
       const full = join(dir, name);
+      if (full === denyPath) continue; // never scan the local denylist file itself
       const st = statSync(full);
       if (st.isDirectory()) { walk(full); continue; }
       const rel = relative(root, full);

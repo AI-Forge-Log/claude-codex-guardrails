@@ -13,6 +13,8 @@ const EMAIL = 'a' + '@' + 'real.com';              // non-whitelisted email
 const NEAR_EMAIL = 'x' + '@' + 'notexample.com';   // domain merely ENDS WITH example.com -> must still flag
 const OK_EMAIL = 'u' + '@' + 'example.com';        // exact allowlisted domain -> must NOT flag
 const WIN_PATH = 'C:' + BS + 'Users' + BS + 'bob'; // Windows-style absolute path
+const DENY_TERM = 'super' + 'secret' + 'tok';      // arbitrary denylist term (runtime-built)
+const EVIL_EMAIL = 'real' + '@' + 'evil.com';      // forbidden email after an allowlisted one
 
 function fixture(files) {
   const dir = mkdtempSync(join(tmpdir(), 'lg-'));
@@ -65,4 +67,31 @@ test('clean code file passes', () => {
   const hits = scanDir(dir);
   rmSync(dir, { recursive: true, force: true });
   assert.equal(hits.length, 0);
+});
+
+test('skips its own denylist file but still scans committed files', () => {
+  const dir = fixture({
+    '.leakguard-local.txt': DENY_TERM + '\n',
+    'a.mjs': 'const x = "' + DENY_TERM + '";\n',
+  });
+  const hits = scanDir(dir);
+  rmSync(dir, { recursive: true, force: true });
+  // committed file with the term is flagged...
+  assert.ok(hits.some(h => h.rule === 'denylist' && h.file === 'a.mjs'));
+  // ...but the denylist file itself is never reported under any rule.
+  assert.equal(hits.filter(h => h.file === '.leakguard-local.txt').length, 0);
+});
+
+test('denylist-only fixture is clean (file skipped, nothing else matches)', () => {
+  const dir = fixture({ '.leakguard-local.txt': DENY_TERM + '\n' });
+  const hits = scanDir(dir);
+  rmSync(dir, { recursive: true, force: true });
+  assert.equal(hits.length, 0);
+});
+
+test('flags a forbidden email that follows an allowlisted email on the same line', () => {
+  const dir = fixture({ 'tools/multi.mjs': 'const c = "' + OK_EMAIL + ', ' + EVIL_EMAIL + '";\n' });
+  const hits = scanDir(dir);
+  rmSync(dir, { recursive: true, force: true });
+  assert.ok(hits.some(h => h.rule === 'email'));
 });
